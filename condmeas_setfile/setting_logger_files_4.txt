@@ -1,0 +1,8 @@
+\\172.16.3.126\Data\_DataLogger
+\\172.16.3.127\Users\user\Documents\CONT-TEMP2
+1,9,8
+2,10,8
+3
+4
+5
+6,10,8
