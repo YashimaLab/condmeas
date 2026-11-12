@@ -1,10 +1,12 @@
-import pyvisa
-import os
+# pip install pyvisa numpy colorama
+import ctypes
 import datetime
-import shutil
-import time
 import numpy as np
+import os
+import pyvisa
+import shutil
 from threading import Thread
+import time
 
 # Keithleyの識別子一覧
 KEITHLEY_MAP = {
@@ -21,6 +23,38 @@ DATA_DIRECTORY_MAP = {
     '4': r'C:\Data',
     '6': r'C:\Users\user\Documents\data'
 }
+
+# ケースレーごとの色指定
+try:
+    import colorama
+    from colorama import Fore, Style
+    colorama.just_fix_windows_console()  # WindowsのANSIカラー表示を正規に有効化
+    HAS_COLORAMA = True
+except ImportError:
+    HAS_COLORAMA = False
+
+# 号機ごとの文字色設定
+if HAS_COLORAMA:
+    COLOR_MAP = {
+        '1': Fore.LIGHTGREEN_EX,
+        '3': Fore.LIGHTCYAN_EX,
+        '4': Fore.LIGHTYELLOW_EX,
+        '6': Fore.LIGHTWHITE_EX,
+    }
+    COLOR_RESET = Style.RESET_ALL   # デフォルト色に戻す
+else:
+    COLOR_MAP = {}
+    COLOR_RESET = ""
+
+# ケースレーごとの色適用
+def setup_console_appearance(furnace_number):
+    # 号機に応じた文字色を適用（以降のprintがすべてこの色になる）
+    unit_color = COLOR_MAP.get(furnace_number, COLOR_RESET)
+    print(unit_color, end='')
+
+    # ウィンドウタイトルにも号機を表示（タスクバーでの誤認防止）
+    title = f"Keithley Unit {furnace_number}"
+    ctypes.windll.kernel32.SetConsoleTitleW(title)
 
 #数値への変換判定、うまくいかないならFalseを返す
 def validate_number(number, target_type):
@@ -73,40 +107,45 @@ def find_keithley(rm, visa_list):
             print('入力された号機のKeithleyは検出されていません。正しい号機を入力してください。')
             print('The Keithley unit with the entered serial number was not found. Please enter the correct serial number.')
 
-    inst_1 = rm.open_resource(find_name)
-    verify_connection(rm, inst_1)
-    inst_1.close()
+    try:
+        # 接続と検証を同時に行う
+        inst_1 = verify_connection(rm, find_name)
+        inst_1.close()
+    except RuntimeError as e:
+        print(f'Keithleyをつないでやり直してください。\nEnterを押すと終了します。:{e}')
+        print('Please connect keithley and start over.\nPress Enter to exit.')
+        rm.close()
+        input()
+        exit()
     
     return find_name, furnace_number
 
 # keithleyのエラーチェック
-def verify_connection(rm, inst):
-    out = inst.query('*IDN?')
+def verify_connection(rm, inst_path):
+    try:
+        inst = rm.open_resource(inst_path)
+    except Exception as e:
+        # そもそも機器が見つからない・開けない場合のエラー
+        raise RuntimeError(f"Keithleyとの通信を開けません。電源やケーブルを確認してください。\n詳細: {e}")
 
+    out = inst.query('*IDN?')
     if 'KEITHLEY INSTRUMENTS' not in out:
-        print('keithleyを再起動してやり直してください。\nEnterを押すと終了します。')
-        print('Please restart keithley and try again.\nPress Enter to exit.')
         inst.close()
-        rm.close()
-        x = input()
-        exit()
+        raise RuntimeError("Keithleyが正しく認識されていません。機器を再起動してください。")
     
     inst.write(':ABORt')
     out = inst.query(':SYSTem:ERRor?')
     s_comma = out.split(',')
     if s_comma[0] != "0":
-        print('keithleyを再起動してやり直してください。\nEnterを押すと終了します。')
-        print('Please restart keithley and try again.\nPress Enter to exit.')
         inst.close()
-        rm.close()
-        x = input()
-        exit()
+        raise RuntimeError(f"Keithley内部にエラーが残っています。機器を再起動してください。\n詳細: {out}")
     
     inst.write('*CLS;*RST')
+    return inst # 成功したら開いたインスタンスを返す
 
 # データ置き場の設定
 def select_save_directory(data_path):
-    files_dir = [f for f in os.listdir(datapath) if os.path.isdir(os.path.join(datapath, f))]
+    files_dir = [f for f in os.listdir(data_path) if os.path.isdir(os.path.join(data_path, f))]
     file_maxnumber = len(files_dir) - 1
     
     while True:
@@ -459,13 +498,10 @@ def measure_conductivity(nowtime, measurement_number, keithley_path, data_path, 
                 log_List = f.readlines()
                 Log_pO2 = log_List[len(log_List) - 1].rstrip('\n').split(',')[int(logger_infoList[1][1]) + 2].lstrip().lstrip('+')
                 pO2 = str(10 ** (-1 * float(Log_pO2)))
-        
         # インスタンス生成、おまじないのようなもの
         rm = pyvisa.ResourceManager()
-        # ケースレーとの通信を開く
-        keithley = rm.open_resource(keithley_path)
-        # 接続テスト
-        verify_connection(rm, keithley)
+        # 接続を開き、同時にエラーチェック
+        keithley = verify_connection(rm, keithley_path)
         # 電流を測定するようにセット
         keithley.write(':SENSe:FUNCtion "CURRent" ')
         # 電流の上限、下限
@@ -501,12 +537,9 @@ def measure_conductivity(nowtime, measurement_number, keithley_path, data_path, 
         keithley.write(':TRACe:CLEar "defbuffer1"')
         keithley.timeout = 240000
         keithley.write(':INITiate')
-        keithley.write('*WAI')
-        while True:
-            out = keithley.query(':STATus:OPERation:CONDition?')
-            out = out.rstrip('\n')
-            if out == '0':
-                break
+
+        # Keithley側の処理が終わるまで待機
+        keithley.query('*OPC?')
         
         out = keithley.query(':OUTPut:STATe?')
         out = out.rstrip('\n')
@@ -515,13 +548,18 @@ def measure_conductivity(nowtime, measurement_number, keithley_path, data_path, 
             keithley.write(':OUTPut OFF')
         out = keithley.query(':TRACe:ACTual? "defbuffer1"')
         measure_points = int(out.rstrip('\n'))
-        # ここに相対時間、電圧値、電流値が入る
+
+        # 1回のクエリで、1番目からmeasure_points番目までの全データを一括取得する
+        sCmds = f':TRACe:DATA? 1, {measure_points}, "defbuffer1", RELative, SOURce, READing'
+        out = keithley.query(sCmds)
+        all_data_str = out.rstrip('\n').split(',')
+        
         rawdata = []
         rawdata_str = []
-        for i in range(1, measure_points + 1):
-            sCmds = f':TRACe:DATA? {i}, {i}, "defbuffer1", RELative, SOURce, READing'
-            out = keithley.query(sCmds)
-            data_str = out.rstrip('\n').split(',')
+        # Python側で切り分けて格納
+        for i in range(measure_points):
+            idx = i * 3
+            data_str = [all_data_str[idx], all_data_str[idx+1], all_data_str[idx+2]]
             data = [float(n) for n in data_str]
             rawdata.append(data)
             rawdata_str.append(data_str)
@@ -584,6 +622,7 @@ has_error = False  # エラーフラグの初期化
 
 # 起動時処理、keithleyの自動検索と接続確認、最後にパスを渡す
 keithley_path, furnace_number = initialize_measurement()
+setup_console_appearance(furnace_number)
 datapath = DATA_DIRECTORY_MAP[furnace_number]
 print(f"この測定は{furnace_number}号機での測定です。")
 print(f"This measurement was taken on Unit {furnace_number}.")
