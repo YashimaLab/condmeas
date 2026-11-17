@@ -24,17 +24,20 @@ DATA_DIRECTORY_MAP = {
     '6': r'C:\Users\user\Documents\data'
 }
 
-# ケースレーごとの色指定
-try:
-    import colorama
-    from colorama import Fore, Style
-    colorama.just_fix_windows_console()  # WindowsのANSIカラー表示を正規に有効化
-    HAS_COLORAMA = True
-except ImportError:
-    HAS_COLORAMA = False
+COLOR_MODE = False # 色付け機能を適用するか
 
-# 号機ごとの文字色設定
-if HAS_COLORAMA:
+# Keithleyごとの色指定
+if COLOR_MODE:
+    try:
+        import colorama
+        from colorama import Fore, Style
+        colorama.just_fix_windows_console()  # WindowsのANSIカラー表示を正規に有効化
+        HAS_COLORAMA = True
+    except ImportError:
+        HAS_COLORAMA = False
+
+# Keithleyーごとの文字色設定
+if COLOR_MODE and HAS_COLORAMA:
     COLOR_MAP = {
         '1': Fore.LIGHTGREEN_EX,
         '3': Fore.LIGHTCYAN_EX,
@@ -46,13 +49,13 @@ else:
     COLOR_MAP = {}
     COLOR_RESET = ""
 
-# ケースレーごとの色適用
+# Keithleyーごとの色適用
 def setup_console_appearance(furnace_number):
-    # 号機に応じた文字色を適用（以降のprintがすべてこの色になる）
+    # Keithleyに応じた文字色を適用（以降のprintがすべてこの色になる）
     unit_color = COLOR_MAP.get(furnace_number, COLOR_RESET)
     print(unit_color, end='')
 
-    # ウィンドウタイトルにも号機を表示（タスクバーでの誤認防止）
+    # ウィンドウタイトルにもKeithley番号を表示（タスクバーでの誤認防止）
     title = f"Keithley Unit {furnace_number}"
     ctypes.windll.kernel32.SetConsoleTitleW(title)
 
@@ -100,11 +103,11 @@ def find_keithley(rm, visa_list):
         print("Multiple Keithley units are connected. Please select which one to use.")
         print('Unit:', ', '.join(connected_keithleys.keys()))
         while True:
-            furnace_number = input('使用する号機を入力してください (例: 1): ')
+            furnace_number = input('使用するKeithleyを入力してください (例: 1): ')
             if furnace_number in connected_keithleys:
                 find_name = connected_keithleys[furnace_number]
                 break
-            print('入力された号機のKeithleyは検出されていません。正しい号機を入力してください。')
+            print('入力されたKeithleyは検出されていません。正しいKeithley番号を入力してください。')
             print('The Keithley unit with the entered serial number was not found. Please enter the correct serial number.')
 
     try:
@@ -678,7 +681,7 @@ while True:
                 try:
                     rm = pyvisa.ResourceManager()
                     visa_list = rm.list_resources()
-                    identifier = KEITHLEY_MAP[furnace_number]  # 最初に選んだ号機の識別子
+                    identifier = KEITHLEY_MAP[furnace_number]  # 最初に選んだKeithleyの識別子
                     new_path = None
                     for machine_name in visa_list:
                         if identifier in machine_name:
